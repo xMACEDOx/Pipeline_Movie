@@ -1,0 +1,241 @@
+version: "3.9"
+
+networks:
+  moviepulse-net:
+
+volumes:
+  kafka_data:
+  zookeeper_data:
+  minio_data:
+  postgres_data:
+  airflow_db:
+  grafana_data:
+
+services:
+
+  # Zookeeper + Kafka Broker
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    container_name: zookeeper
+    networks: [moviepulse-net]
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: kafka
+    depends_on: [zookeeper]
+    networks: [moviepulse-net]
+    ports:
+      - "9092:9092"     # host -> kafka
+      - "29092:29092"   # docker internal (opcional)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+
+      # listeners
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # configs úteis
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on: [kafka]
+    networks: [moviepulse-net]
+    ports:
+      - "8085:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+
+
+  # Kafka Connect (rodando, mas sem conector TMDb "pronto")
+
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.5.3
+    container_name: kafka-connect
+    depends_on: [kafka]
+    networks: [moviepulse-net]
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "kafka:29092"
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: "connect-cluster"
+
+      CONNECT_CONFIG_STORAGE_TOPIC: "connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "connect-status"
+
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_INTERNAL_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect"
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
+
+ 
+  # MinIO (Bronze)
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    networks: [moviepulse-net]
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+
+  # cria bucket bronze automaticamente
+  minio-mc:
+    image: minio/mc:latest
+    container_name: minio-mc
+    depends_on: [minio]
+    networks: [moviepulse-net]
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
+      mc mb -p local/bronze || true &&
+      mc mb -p local/silver || true &&
+      mc mb -p local/gold || true &&
+      echo 'Buckets OK' &&
+      tail -f /dev/null
+      "
+
+
+  # Postgres (Silver/Gold)
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    networks: [moviepulse-net]
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+
+  # Spark (processamento)
+  
+  spark:
+    image: bitnami/spark:3.5
+    container_name: spark
+    networks: [moviepulse-net]
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "8080:8080"  # Spark UI (master)
+      - "7077:7077"
+    volumes:
+      - ./spark/jobs:/opt/bitnami/spark/jobs
+
+ 
+  # Airflow (orquestração)
+
+  airflow-db:
+    image: postgres:16
+    container_name: airflow-db
+    networks: [moviepulse-net]
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db:/var/lib/postgresql/data
+
+  airflow:
+    image: apache/airflow:2.10.2
+    container_name: airflow
+    depends_on: [airflow-db, kafka, postgres, minio]
+    networks: [moviepulse-net]
+    ports:
+      - "8081:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+
+      # variáveis úteis pro DAG (você usa no PythonOperator)
+      TMDB_API_KEY: ${TMDB_API_KEY}
+      KAFKA_BOOTSTRAP: "kafka:29092"
+      POSTGRES_DSN: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+      MINIO_ENDPOINT: "http://minio:9000"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+    user: "${AIRFLOW_UID}:0"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/requirements.txt:/requirements.txt
+    command: >
+      bash -c "
+      airflow db migrate &&
+      airflow users create
+        --username ${AIRFLOW_ADMIN_USER}
+        --password ${AIRFLOW_ADMIN_PASSWORD}
+        --firstname Admin
+        --lastname Local
+        --role Admin
+        --email ${AIRFLOW_ADMIN_EMAIL} || true &&
+      airflow webserver & airflow scheduler
+      "
+      bash -c "
+      pip install --no-cache-dir -r /requirements.txt &&
+      airflow db migrate &&
+      airflow webserver & airflow scheduler
+      "
+
+  # Metabase (BI)
+
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase
+    depends_on: [postgres]
+    networks: [moviepulse-net]
+    ports:
+      - "3000:3000"
+
+
+  # Grafana (observabilidade - básico)
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    networks: [moviepulse-net]
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
