@@ -92,7 +92,13 @@ Para criar o tópico "movies.trending.daily" utilizando o kafka;
 docker exec -it kafka kafka-topics --bootstrap-server kafka:29092 --create --topic movies.trending.daily --partitions 3 --replication-factor 1
 
 ```
+Vamos listar os topicos para garantir que deu certo, no powershell:
 
+```
+docker exec -it kafka kafka-topics --bootstrap-server kafka:29092 --list
+
+
+```
 Dentro da pasta "dags" criar o arquivo "tmdb_to_kafka.py"
 
 Dentro do arquivo "tmdb_to_kafka.py" preencher com:
@@ -176,7 +182,7 @@ def main():
 
     # Validação básica: sem API Key o pipeline não pode rodar
     if not TMDB_API_KEY:
-        raise RuntimeError("❌ TMDB_API_KEY não encontrada nas variáveis de ambiente.")
+        raise RuntimeError(" TMDB_API_KEY não encontrada nas variáveis de ambiente.")
 
     # Criação do Producer Kafka
     producer = KafkaProducer(
@@ -241,7 +247,7 @@ def main():
     # Garante que todas as mensagens foram enviadas
     producer.flush()
 
-    print(f"✅ Publicados {len(movies)} eventos no tópico {TOPIC}")
+    print(f" Publicados {len(movies)} eventos no tópico {TOPIC}")
 
 
 # =========================
@@ -269,11 +275,35 @@ Agora vamos instalar as dependencias do airflow:
 Dentro do powershell coloque o seguinte comando:
 
 ```
-docker exec -it airflow pip install requests kafka-python
+docker exec -it airflow bash -lc "python -m pip install --no-cache-dir kafka-python requests
+
 ```
 
+Agora vamos confirmar se deu certo?? Vamos validar a conexão do airflow com o kafka.
 
+Para isso, vamos abrir outro terminal para utilizar o consumer do Kafka, nele vamos colocar o seguinte comando :
 
+```
+docker exec -it kafka kafka-console-consumer `
+  --bootstrap-server kafka:29092 `
+  --topic movies.trending.daily `
+  --from-beginning
+
+```
+
+Voltando para o terminal principal, vamos utilizar o producer utilizadno esse comando:
+
+```
+docker exec -it airflow bash -lc "python -c \"from kafka import KafkaProducer; p=KafkaProducer(bootstrap_servers=['kafka:29092']); p.send('movies.trending.daily', b'{\\\"source\\\":\\\"powershell_test\\\",\\\"status\\\":\\\"ok\\\"}'); p.flush(); print('sent')\""
+```
+
+O resultado esperado no consumer é :
+
+```
+{"source":"powershell_test","status":"ok"}
+```
+
+Se deu certo, vamos para o proximo passo.
 
 
 
