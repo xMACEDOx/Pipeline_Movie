@@ -188,6 +188,7 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      PIP_ADDITIONAL_REQUIREMENTS: "requests kafka-python"
 
       # variáveis úteis pro DAG (você usa no PythonOperator)
       TMDB_API_KEY: ${TMDB_API_KEY}
@@ -197,11 +198,13 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
     user: "${AIRFLOW_UID}:0"
+
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/requirements.txt:/requirements.txt
     command: >
       bash -c "
+      python -m pip install --no-cache-dir -r /requirements.txt &&
       airflow db migrate &&
       airflow users create
         --username ${AIRFLOW_ADMIN_USER}
@@ -211,12 +214,7 @@ services:
         --role Admin
         --email ${AIRFLOW_ADMIN_EMAIL} || true &&
       airflow webserver & airflow scheduler
-      "
-      bash -c "
-      pip install --no-cache-dir -r /requirements.txt &&
-      airflow db migrate &&
-      airflow webserver & airflow scheduler
-      "
+       "
 
   # Metabase (BI)
 
