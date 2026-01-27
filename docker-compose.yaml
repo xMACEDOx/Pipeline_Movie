@@ -150,17 +150,30 @@ services:
 
   # Spark (processamento)
   
-  spark:
-    image: bitnami/spark:3.5
-    container_name: spark
-    networks: [moviepulse-net]
-    environment:
-      - SPARK_MODE=master
+ # spark:
+ #   image: apache/spark:3.5.0
+  #  container_name: spark
+  #  networks: [moviepulse-net]
+ #   environment:
+#- SPARK_MODE=master
+#ports:
+  #    - "8080:8080"  # Spark UI (master)
+  #    - "7077:7077"
+  #  volumes:
+  #    - ./spark/jobs:/opt/bitnami/spark/jobs
+
+  spark-jupyter:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: spark_jupyter
     ports:
-      - "8080:8080"  # Spark UI (master)
-      - "7077:7077"
+      - "8888:8888"
+      - "4040:4040"   # Spark UI (job)
     volumes:
-      - ./spark/jobs:/opt/bitnami/spark/jobs
+      - .:/home/jovyan/PIPELINE_MOVIE
+    networks:
+      - moviepulse-net
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
 
  
   # Airflow (orquestração)
