@@ -1,3 +1,5 @@
+requests
 kafka-python==2.0.2
 boto3
 python-dateutil
+psycopg2-binary
