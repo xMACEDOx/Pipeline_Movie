@@ -162,7 +162,7 @@ s3://bronze/
 ### 1. Clonar e configurar o .env
 
 ```bash
-git clone https://github.com/seu-usuario/Pipeline_Movie.git
+git clone https://github.com/xmacedox/Pipeline_Movie.git
 cd Pipeline_Movie
 
 cp .env.example .env
