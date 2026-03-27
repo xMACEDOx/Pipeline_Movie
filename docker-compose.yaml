@@ -147,6 +147,18 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pg_admin
+    depends_on: [postgres]
+    networks: [moviepulse-net]
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@moviepulse.com
+      PGADMIN_DEFAULT_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: unless-stopped
+
 
   # Spark (processamento)
   
@@ -190,12 +202,13 @@ services:
       - airflow_db:/var/lib/postgresql/data
 
   airflow:
-    image: apache/airflow:2.10.2
+    image: apache/airflow:2.10.5
     container_name: airflow
     depends_on: [airflow-db, kafka, postgres, minio]
     networks: [moviepulse-net]
     ports:
       - "8081:8080"
+    user: "50000:0"
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
@@ -204,16 +217,6 @@ services:
       AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER}
       AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
       AIRFLOW_ADMIN_EMAIL: ${AIRFLOW_ADMIN_EMAIL}
-
-      # Dependências Python instaladas no boot
-      PIP_ADDITIONAL_REQUIREMENTS: >-
-        requests
-        kafka-python
-        boto3
-        psycopg2-binary
-        apache-airflow-providers-apache-spark
-
-      # Variáveis de ambiente repassadas às DAGs
       TMDB_API_KEY: ${TMDB_API_KEY}
       KAFKA_BOOTSTRAP: "kafka:29092"
       MINIO_ENDPOINT: "http://minio:9000"
@@ -224,34 +227,14 @@ services:
       PG_DB: ${POSTGRES_DB}
       PG_USER: ${POSTGRES_USER}
       PG_PASSWORD: ${POSTGRES_PASSWORD}
-
-      # Spark: aponta para o binário dentro do container Airflow
-      AIRFLOW__APACHE__SPARK__CONN_SPARK_LOCAL: "spark://local"
-      SPARK_HOME: "/home/airflow/.local/lib/python3.12/site-packages/pyspark"
-    user: "${AIRFLOW_UID}:0"
-
     volumes:
       - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/requirements.txt:/requirements.txt
-      - ./spark/jobs:/opt/airflow/spark/jobs       # scripts PySpark
-      - ./spark/jars:/opt/airflow/spark/jars       # JARs S3A + JDBC
-    command: >
-      bash -c "
-      python -m pip install --no-cache-dir -r /requirements.txt &&
-      airflow db migrate &&
-      airflow users create
-        --username ${AIRFLOW_ADMIN_USER}
-        --password ${AIRFLOW_ADMIN_PASSWORD}
-        --firstname Admin
-        --lastname Local
-        --role Admin
-        --email ${AIRFLOW_ADMIN_EMAIL} || true &&
-      airflow connections add spark_local
-        --conn-type spark
-        --conn-host local
-        --conn-extra '{"deploy-mode": "client"}' || true &&
-      airflow webserver & airflow scheduler
-       "
+      - ./airflow/start.sh:/start.sh
+      - ./spark/jobs:/opt/airflow/spark/jobs
+      - ./spark/jars:/opt/airflow/spark/jars
+    command:
+      - bash
+      - /start.sh
 
   bronze-consumer:
      build: ./consumers/bronze
